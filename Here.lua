@@ -538,7 +538,7 @@
             return nil
         end
 
-        task.spawn(function()
+        Local (function()
             while not IsUnloading do
                 -- Refresh services every loop to handle round restarts correctly
                 local rep = GetServiceRobust("ReplicatorService", {"Actors", "_lastReplicate"})
@@ -571,7 +571,7 @@
                 end
 
                 updateStatus()
-                task.wait(5)
+                
                 if IsUnloading then break end
             end
         end)
@@ -2948,4 +2948,5 @@
             getgenv().ScriptLoaded = nil
             print("Script Unloaded Cleanly.")
         end
+
 

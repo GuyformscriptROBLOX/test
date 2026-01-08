@@ -538,48 +538,40 @@
             return nil
         end
         task.spawn(function()
-    local lastUpdate = tick()
-    local UPDATE_INTERVAL = 5 -- sekundy między aktualizacjami
+    if IsUnloading then return end
     
-    local function tryUpdate()
-        local currentTime = tick()
-        if currentTime - lastUpdate < UPDATE_INTERVAL then
-            return
-        end
-        lastUpdate = currentTime
-        
-        -- Refresh services every loop to handle round restarts correctly
-        local rep = GetServiceRobust("ReplicatorService", {"Actors", "_lastReplicate"})
-        if rep then replicator_service = rep; Status.RepSvc = "OK" end
+    -- Refresh services once to handle round restarts correctly
+    local rep = GetServiceRobust("ReplicatorService", {"Actors", "_lastReplicate"})
+    if rep then replicator_service = rep; Status.RepSvc = "OK" end
 
-        local cli = GetServiceRobust("ClientService", {"Clients", "LocalClient"})
-        if cli then client_service = cli; Status.ClientSvc = "OK" end
+    local cli = GetServiceRobust("ClientService", {"Clients", "LocalClient"})
+    if cli then client_service = cli; Status.ClientSvc = "OK" end
 
-        local inv = GetServiceRobust("InventoryService", {"Inventories", "Primary", "Load"})
-        if inv then inventory_service = inv; Status.Storage = "OK" end
+    local inv = GetServiceRobust("InventoryService", {"Inventories", "Primary", "Load"})
+    if inv then inventory_service = inv; Status.Storage = "OK" end
 
-        local veh = GetServiceRobust("VehicleService", {"Vehicles", "Changed"})
-        if not veh then
-            local tables = {}
-            tables = cached_filtergc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
-            for _, t in pairs(tables) do
-                if type(t) == "table" and t.Vehicles then
-                    veh = t
-                    break
-                end
+    local veh = GetServiceRobust("VehicleService", {"Vehicles", "Changed"})
+    if not veh then
+        local tables = {}
+        tables = cached_filtergc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
+        for _, t in pairs(tables) do
+            if type(t) == "table" and t.Vehicles then
+                veh = t
+                break
             end
         end
-        if veh then vehicle_service = veh; Status.Vehicles = "OK" end
-
-        local tConf = GetTurretConfig()
-        if tConf then
-            Status.Turrets = "OK"
-        else
-            Status.Turrets = "Waiting..."
-        end
-
-        updateStatus()
     end
+    if veh then vehicle_service = veh; Status.Vehicles = "OK" end
+
+    local tConf = GetTurretConfig()
+    if tConf then
+        Status.Turrets = "OK"
+    else
+        Status.Turrets = "Waiting..."
+    end
+
+    updateStatus()
+end) 
     
     -- Podłącz się do RunService zamiast używać pętli
     local RunService = game:GetService("RunService")
@@ -2967,6 +2959,7 @@ end)
             getgenv().ScriptLoaded = nil
             print("Script Unloaded Cleanly.")
         end
+
 
 
 

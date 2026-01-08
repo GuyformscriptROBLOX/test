@@ -571,19 +571,6 @@
     end
 
     updateStatus()
-end) 
-    
-    -- Podłącz się do RunService zamiast używać pętli
-    local RunService = game:GetService("RunService")
-    local connection
-    connection = RunService.Heartbeat:Connect(function()
-        if IsUnloading then
-            connection:Disconnect()
-            return
-        end
-        tryUpdate()
-    end)
-end) 
 
         
 
@@ -2959,6 +2946,7 @@ end)
             getgenv().ScriptLoaded = nil
             print("Script Unloaded Cleanly.")
         end
+
 
 
 

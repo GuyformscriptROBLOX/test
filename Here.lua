@@ -2410,6 +2410,8 @@
             local active_actors = {}
             
             -- Collect actors from Players (Primary Method)
+            -- Direct iteration over PlayerNameMap is faster if we want all players, but GetPlayers is fine.
+            -- Collect actors from Players (Primary Method)
             local plrs = players:GetPlayers()
             for i = 1, #plrs do
                 local p = plrs[i]
@@ -2869,15 +2871,17 @@
             table.clear(esp_objects)
             table.clear(esp_pool)
             
-            if getgenv().BRM5_FOV_UI then
-                if typeof(getgenv().BRM5_FOV_UI) == "table" and getgenv().BRM5_FOV_UI.Gui then 
-                    pcall(function() getgenv().BRM5_FOV_UI.Gui:Destroy() end) 
-                elseif typeof(getgenv().BRM5_FOV_UI) == "Instance" then
-                    pcall(function() getgenv().BRM5_FOV_UI:Destroy() end)
-                end
-                getgenv().BRM5_FOV_UI = nil
+            if fov_circle then 
+                pcall(function() fov_circle:Remove() end) 
+                fov_circle = nil 
             end
             
+            if getgenv().BRM5_FOV_Circle then 
+                pcall(function() getgenv().BRM5_FOV_Circle:Remove() end)
+                getgenv().BRM5_FOV_Circle = nil
+            end
+            
+            if MonitorUI and MonitorUI.Gui then MonitorUI.Gui:Destroy() end
             if MonitorUI and MonitorUI.Gui then MonitorUI.Gui:Destroy() end
             if StorageMonitorUI and StorageMonitorUI.Gui then StorageMonitorUI.Gui:Destroy() end
             
@@ -2940,7 +2944,7 @@
                 game:GetService("Lighting").Atmosphere.Density = 0.3
             end)
             
-            -- if Library then Library:Unload() end -- Removed to prevent infinite recursion
+            if Library then Library:Unload() end
             getgenv().ScriptLoaded = nil
             print("Script Unloaded Cleanly.")
         end

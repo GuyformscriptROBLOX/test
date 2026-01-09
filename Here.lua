@@ -496,7 +496,32 @@
             if UI_Labels.Technical then UI_Labels.Technical:SetTitle("Int: " .. text) end
         end
 
+        local function findModule(name)
+            local RF = game:GetService("ReplicatedFirst")
+            for _, flux_name in ipairs({"Flux_client", "Flux/client", "Flux"}) do
+                local flux = RF:FindFirstChild(flux_name)
+                if flux then
+                    local found = flux:FindFirstChild(name, true)
+                    if found then return found end
+                end
+            end
+            local found = RF:FindFirstChild(name, true)
+            if found then return found end
 
+            local Packages = replicated_storage:FindFirstChild("Packages")
+            local RequireMod = Packages and Packages:FindFirstChild("require")
+            if RequireMod then
+                local success, Loader = pcall(require, RequireMod)
+                if success and Loader and Loader._modules and Loader._modules[name] then
+                    return Loader._modules[name]
+                end
+            end
+            
+            found = replicated_storage:FindFirstChild(name, true)
+            if found and found:IsA("ModuleScript") then return found end
+
+            return nil
+        end
 
         local function GetServiceRobust(name, keys)
             local results = {}
@@ -748,7 +773,8 @@
             return is_vis
         end
 
-
+        local stepTime = travelTime
+        local ping = local_player:GetNetworkPing()
 
         local function register_actor(actor)
             if not actor or actor_list[actor] then return end
@@ -793,7 +819,7 @@
                     
                     local gc_results = cached_filtergc("table", {Keys = {"FireServer", "InvokeServer", "_events"}}, false)
                     for _, t in pairs(gc_results) do
-                        if type(t._events) == "table" and t._events.RegisterActor then
+                        if t._events and t._events.RegisterActor then
                             network_obj = t
                             break
                         end
@@ -1207,7 +1233,7 @@
                     EmptyLbl.Size = UDim2.new(1, 0, 1, 0)
                     EmptyLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
                     EmptyLbl.BackgroundTransparency = 1
-                    EmptyLbl.Font = Enum.Font.Gotham
+                    EmptyLbl.Font = Enum.Font.GothamItalic
                     EmptyLbl.TextSize = 11
                     EmptyLbl.TextXAlignment = Enum.TextXAlignment.Left
                     EmptyLbl.Parent = Row
@@ -1777,7 +1803,13 @@
                 task.wait(10)
             end
         end)
-
+        add_connection(run_service.RenderStepped:Connect(function()
+            local radius = (get_val('FOVRadius') or 400) * 2
+            local visible = get_bool('ShowFOV') and get_bool('SilentAimEnabled')
+            
+            FOV_Data.Circle.Size = UDim2.new(0, radius, 0, radius)
+            FOV_Data.Gui.Enabled = visible
+        end))
 
         -- Auto Lockpick removed
 
@@ -2292,8 +2324,6 @@
         local last_pmap_upd = 0
         local stable_count_zombies = 0
         local stable_count_npcs = 0
-        local active_actors = {}
-        local handled = {}
         
         -- Main Loop
         add_connection(run_service.RenderStepped:Connect(function()
@@ -2374,13 +2404,11 @@
             end
 
             table.clear(handled)
-            table.clear(active_actors)
             local my_team = get_team(local_player)
 
             -- Unified Processor
+            local active_actors = {}
             
-            -- Collect actors from Players (Primary Method)
-            -- Direct iteration over PlayerNameMap is faster if we want all players, but GetPlayers is fine.
             -- Collect actors from Players (Primary Method)
             local plrs = players:GetPlayers()
             for i = 1, #plrs do
@@ -2841,17 +2869,15 @@
             table.clear(esp_objects)
             table.clear(esp_pool)
             
-            if fov_circle then 
-                pcall(function() fov_circle:Remove() end) 
-                fov_circle = nil 
+            if getgenv().BRM5_FOV_UI then
+                if typeof(getgenv().BRM5_FOV_UI) == "table" and getgenv().BRM5_FOV_UI.Gui then 
+                    pcall(function() getgenv().BRM5_FOV_UI.Gui:Destroy() end) 
+                elseif typeof(getgenv().BRM5_FOV_UI) == "Instance" then
+                    pcall(function() getgenv().BRM5_FOV_UI:Destroy() end)
+                end
+                getgenv().BRM5_FOV_UI = nil
             end
             
-            if getgenv().BRM5_FOV_Circle then 
-                pcall(function() getgenv().BRM5_FOV_Circle:Remove() end)
-                getgenv().BRM5_FOV_Circle = nil
-            end
-            
-            if MonitorUI and MonitorUI.Gui then MonitorUI.Gui:Destroy() end
             if MonitorUI and MonitorUI.Gui then MonitorUI.Gui:Destroy() end
             if StorageMonitorUI and StorageMonitorUI.Gui then StorageMonitorUI.Gui:Destroy() end
             
@@ -2914,8 +2940,7 @@
                 game:GetService("Lighting").Atmosphere.Density = 0.3
             end)
             
-            if Library then Library:Unload() end
+            -- if Library then Library:Unload() end -- Removed to prevent infinite recursion
             getgenv().ScriptLoaded = nil
             print("Script Unloaded Cleanly.")
         end
-    

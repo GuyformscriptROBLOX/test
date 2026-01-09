@@ -793,7 +793,7 @@
                     
                     local gc_results = cached_filtergc("table", {Keys = {"FireServer", "InvokeServer", "_events"}}, false)
                     for _, t in pairs(gc_results) do
-                        if t._events and t._events.RegisterActor then
+                        if type(t._events) == "table" and t._events.RegisterActor then
                             network_obj = t
                             break
                         end

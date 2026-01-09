@@ -24,31 +24,12 @@
 
         -- Lightweight caching wrappers for expensive GC calls
         local _gc_cache = {}
-        local function _serialize_args(...)
-            local t = {}
-            for i = 1, select('#', ...) do
-                local v = select(i, ...)
-                t[i] = (type(v) == 'table') and tostring(v) or tostring(v)
-            end
-            return table.concat(t, '|')
-        end
 
-        local function cached_filtergc(...)
-            if type(filtergc) ~= 'function' then return {} end
-            local key = _serialize_args(...)
-            local now = tick()
-            local e = _gc_cache[key]
-            if e and (now - e.t) < 2 then return e.v end
-            local ok, res = pcall(filtergc, ...)
-            res = ok and res or {}
-            _gc_cache[key] = { v = res, t = now }
-            return res
-        end
 
         local _getgc_cache = { t = 0, v = nil }
         local function cached_getgc(all)
             local now = tick()
-            if _getgc_cache.v and (now - _getgc_cache.t) < 2 then return _getgc_cache.v end
+            if _getgc_cache.v and (now - _getgc_cache.t) < 5 then return _getgc_cache.v end
             local ok, res = pcall(getgc, all)
             res = ok and res or {}
             _getgc_cache.v = res
@@ -56,10 +37,33 @@
             return res
         end
 
+        local function cached_search_gc(type_val, options, deep)
+            local res = {}
+            local keys = options.Keys
+            local source = cached_getgc(true)
+            
+            for _, v in pairs(source) do
+                if type(v) == type_val then
+                    local match = true
+                    if keys then
+                        for _, k in ipairs(keys) do
+                             -- Use rawget to avoid metamethods triggering
+                            if type(v) ~= "table" or rawget(v, k) == nil then
+                                match = false
+                                break
+                            end
+                        end
+                    end
+                    if match then table.insert(res, v) end
+                end
+            end
+            return res
+        end
+
         local function findModule(name)
             -- Try GC first
             local results = {}
-            results = cached_filtergc("table", {Keys = {name}}, false)
+            results = cached_search_gc("table", {Keys = {name}}, false)
             for _, t in pairs(results) do
                 if type(t) == "table" and t[name] and typeof(t[name]) == "Instance" and t[name]:IsA("ModuleScript") then
                     local mod = t[name]
@@ -323,22 +327,12 @@
         local function update_movement_obj()
             MovementObj = nil
             pcall(function()
-                -- High priority: GC search for CharacterController instance
-                    if typeof(filtergc) == "function" then
-                    local results = cached_filtergc("table", {Keys = {"VelocityGravity", "_localActor"}, Type = "table"}, false)
-                    for _, v in pairs(results) do
-                        if v._localActor and (v._localActor.Character or v._localActor._model) then
-                            MovementObj = v
-                            break
-                        end
-                    end
-                end
-                if not MovementObj then
-                    for _, v in pairs(cached_getgc(true)) do
-                        if type(v) == "table" and rawget(v, "VelocityGravity") and rawget(v, "_localActor") then
-                            MovementObj = v
-                            break
-                        end
+                -- Use polyfilled cached_search_gc (works via getgc now)
+                local results = cached_search_gc("table", {Keys = {"VelocityGravity", "_localActor"}}, false)
+                for _, v in pairs(results) do
+                    if v._localActor and (v._localActor.Character or v._localActor._model) then
+                        MovementObj = v
+                        break
                     end
                 end
             end)
@@ -525,7 +519,7 @@
 
         local function GetServiceRobust(name, keys)
             local results = {}
-            results = cached_filtergc("table", {Keys = keys}, false)
+            results = cached_search_gc("table", {Keys = keys}, false)
             for _, t in pairs(results) do
                 if t[keys[1]] ~= nil then return t end
             end
@@ -553,7 +547,7 @@
                 local veh = GetServiceRobust("VehicleService", {"Vehicles", "Changed"})
                 if not veh then
                     local tables = {}
-                    tables = cached_filtergc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
+                    tables = cached_search_gc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
                     for _, t in pairs(tables) do
                         if type(t) == "table" and t.Vehicles then
                             veh = t
@@ -776,27 +770,26 @@
         local stepTime = travelTime
         local ping = local_player:GetNetworkPing()
 
+        local function update_cached_parts(actor)
+            local model = actor.Character
+            if model and model.Parent and model:FindFirstChild("Head") then
+                actor._CachedParts = {
+                    Head = model:FindFirstChild("Head"),
+                    UpperTorso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso"),
+                    Primary = model.PrimaryPart or model:FindFirstChild("Head")
+                }
+            else
+                actor._CachedParts = nil
+            end
+            actor._LastPartsUpdate = tick()
+        end
+
         local function register_actor(actor)
             if not actor or actor_list[actor] then return end
             actor_list[actor] = true
             
             actor._Category = actor.Zombie and "Zombie" or (actor.Owner and "Player" or "NPC")
-            
-            task.spawn(function()
-                while actor_list[actor] and not IsUnloading do
-                    local model = actor.Character
-                    if model and model.Parent and model:FindFirstChild("Head") then
-                        actor._CachedParts = {
-                            Head = model:FindFirstChild("Head"),
-                            UpperTorso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso"),
-                            Primary = model.PrimaryPart or model:FindFirstChild("Head")
-                        }
-                    else
-                        actor._CachedParts = nil
-                    end
-                    task.wait(2) -- Refresh parts list occasionally to handle respawns
-                end
-            end)
+            update_cached_parts(actor)
         end
 
         getgenv().NetworkSearchActive = tick()
@@ -817,7 +810,7 @@
                 for i = 1, 30 do
                     if getgenv().NetworkSearchActive ~= currentSearchId then return end
                     
-                    local gc_results = cached_filtergc("table", {Keys = {"FireServer", "InvokeServer", "_events"}}, false)
+                    local gc_results = cached_search_gc("table", {Keys = {"FireServer", "InvokeServer", "_events"}}, false)
                     for _, t in pairs(gc_results) do
                         if t._events and t._events.RegisterActor then
                             network_obj = t
@@ -1792,24 +1785,7 @@
         end))
 
         -- Aggressive Cleanup for Actor List (Anti-Leak)
-        task.spawn(function()
-            while not IsUnloading do
-                for actor in pairs(actor_list) do
-                    -- Actors are tables, their characters are Instances.
-                    if not actor or not actor.Character or not actor.Character.Parent then
-                         actor_list[actor] = nil
-                    end
-                end
-                task.wait(10)
-            end
-        end)
-        add_connection(run_service.RenderStepped:Connect(function()
-            local radius = (get_val('FOVRadius') or 400) * 2
-            local visible = get_bool('ShowFOV') and get_bool('SilentAimEnabled')
-            
-            FOV_Data.Circle.Size = UDim2.new(0, radius, 0, radius)
-            FOV_Data.Gui.Enabled = visible
-        end))
+
 
         -- Auto Lockpick removed
 
@@ -2216,6 +2192,7 @@
         --------------------------------------------------------------------------------
         local f_settings = {}
         local handled = {}
+        local active_actors = {} -- Reused table for main loop
         local dummy_cache = { camPos = Vector3.new() }
         local last_gunmod_tick = 0
         local last_settings_tick = 0
@@ -2224,6 +2201,11 @@
         local colors_cache = { enemy = Color3.new(1,0,0), team = Color3.new(0,1,0), npc = Color3.new(1,1,1), zombie = Color3.new(1, 0.5, 0) }
 
         local function process_actor(actor, id, name, camPos, my_team, f_settings, dummy_cache, handled, now)
+            -- Lazy update of cached parts (Throttle: 2s)
+            if not actor._CachedParts or (now - (actor._LastPartsUpdate or 0) > 2) then
+                update_cached_parts(actor)
+            end
+
             local model = actor.Character
             if not model or not model.Parent then return end
             
@@ -2407,10 +2389,8 @@
             local my_team = get_team(local_player)
 
             -- Unified Processor
-            local active_actors = {}
+            table.clear(active_actors)
             
-            -- Collect actors from Players (Primary Method)
-            -- Direct iteration over PlayerNameMap is faster if we want all players, but GetPlayers is fine.
             -- Collect actors from Players (Primary Method)
             local plrs = players:GetPlayers()
             for i = 1, #plrs do
@@ -2446,8 +2426,12 @@
             for actor in pairs(actor_list) do
                 if not IsUnloading then
                     local model = actor.Character
-                    if model and model.Parent then
-                        if actor.Owner then
+                    if not model or not model.Parent then 
+                        actor_list[actor] = nil
+                        continue 
+                    end
+
+                    if actor.Owner then
                             -- Check if we missed this player (rare)
                             if not active_actors[actor.Owner.UserId] and actor.Owner ~= local_player then
                                 active_actors[actor.Owner.UserId] = {actor = actor, name = actor.Owner.Name}
@@ -2478,7 +2462,6 @@
                         end
                     end
                 end
-            end
               -- Render everything & SA Scan
             local processed = 0
             local count_players, count_zombies, count_npcs = 0, 0, 0
@@ -2871,17 +2854,15 @@
             table.clear(esp_objects)
             table.clear(esp_pool)
             
-            if fov_circle then 
-                pcall(function() fov_circle:Remove() end) 
-                fov_circle = nil 
+            if getgenv().BRM5_FOV_UI then
+                if typeof(getgenv().BRM5_FOV_UI) == "table" and getgenv().BRM5_FOV_UI.Gui then 
+                    pcall(function() getgenv().BRM5_FOV_UI.Gui:Destroy() end) 
+                elseif typeof(getgenv().BRM5_FOV_UI) == "Instance" then
+                    pcall(function() getgenv().BRM5_FOV_UI:Destroy() end)
+                end
+                getgenv().BRM5_FOV_UI = nil
             end
             
-            if getgenv().BRM5_FOV_Circle then 
-                pcall(function() getgenv().BRM5_FOV_Circle:Remove() end)
-                getgenv().BRM5_FOV_Circle = nil
-            end
-            
-            if MonitorUI and MonitorUI.Gui then MonitorUI.Gui:Destroy() end
             if MonitorUI and MonitorUI.Gui then MonitorUI.Gui:Destroy() end
             if StorageMonitorUI and StorageMonitorUI.Gui then StorageMonitorUI.Gui:Destroy() end
             
@@ -2944,7 +2925,7 @@
                 game:GetService("Lighting").Atmosphere.Density = 0.3
             end)
             
-            if Library then Library:Unload() end
+            -- if Library then Library:Unload() end -- Removed to prevent infinite recursion
             getgenv().ScriptLoaded = nil
             print("Script Unloaded Cleanly.")
         end

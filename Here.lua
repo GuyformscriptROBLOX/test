@@ -1,6 +1,6 @@
         local Version = "v1.0.1"
         local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/4lpaca-pin/CompKiller/refs/heads/main/src/source.luau"))();
-
+        Compkiller:Loader("rbxassetid://120245531583106" , 2.5).yield();
         -- Silence Annoying Warnings (Aggressive)
         local oldWarn = warn
         local oldPrint = print
@@ -11,12 +11,17 @@
         end
 
         -- Hook game warnings as well
-        local LogService = game:GetService("LogService")
-        LogService.MessageOut:Connect(function(message, messageType)
-            if messageType == Enum.MessageType.MessageWarning then
-                if message:find("destroyed") or message:find("require") then return end
-            end
-        end)
+        -- Notification Manager --
+        local Notifier = Compkiller.newNotify();
+
+        -- Create Config Manager --
+        local ConfigManager = Compkiller:ConfigManager({
+            Directory = "Compkiller-UI",
+            Config = "BRM5-OldScript"
+        });
+
+        -- Loading UI (Icon, Duration) - Non-blocking --
+        
 
         local TurretConfigModule = nil
         local OriginalTurretStats = {}
@@ -61,15 +66,7 @@
         end
 
         local function findModule(name)
-            -- Try GC first
-            local results = {}
-            results = cached_search_gc("table", {Keys = {name}}, false)
-            for _, t in pairs(results) do
-                if type(t) == "table" and t[name] and typeof(t[name]) == "Instance" and t[name]:IsA("ModuleScript") then
-                    local mod = t[name]
-                    if mod and mod.Parent then return mod end
-                end
-            end
+            -- GC Search removed from here for performance. Use GetServiceRobust if GC search is needed.
             
             -- Fuzzy search
             -- Priority search in Services
@@ -146,10 +143,6 @@
             ShowZombies = true,
             ShowNPCs = true,
             ShowTracers = false,
-            BoxStyle = "Full",
-            HealthStyle = "Bar",
-            LabelPosition = "Bottom",
-            TracerOrigin = "Bottom",
             SilentAimEnabled = true,
             FOVRadius = 400,
             ShowFOV = true,
@@ -167,7 +160,11 @@
             NoMovementPenalty = false,
             AlwaysDay = false,
             NoFog = false,
-            MaxESPDistance = 1000
+            MaxESPDistance = 1000,
+            UnlockCamera = false,
+            FreeCam = false,
+            FreeCamSpeed = 1,
+            FreeCamKey = "V"
         }
 
         local UI_Elements = {}
@@ -211,11 +208,23 @@
             FlySpeed = 50,
             InfStamina = false,
             WalkSpeedMult = 1,
-            SprintSpeedMult = 1
+            SprintSpeedMult = 1,
+            Spinbot = false,
+            SpinSpeed = 50,
+            UnlockCamera = false,
+            FreeCam = false,
+            FreeCamSpeed = 1
         }
 
         local Library = {
-            Notify = function(self, msg, duration) print("[NOTIFY]: " .. msg) end,
+            Notify = function(self, msg, duration) 
+                Notifier.new({
+                    Title = "BRM5 Cheat",
+                    Content = msg,
+                    Duration = duration or 5,
+                    Icon = "rbxassetid://120245531583106"
+                });
+            end,
             Unload = function(self) if Unload then Unload() end end,
             AccentColor = Color3.fromRGB(0, 85, 255)
         }
@@ -230,12 +239,7 @@
         local replicated_storage = game:GetService("ReplicatedStorage")
         local lighting = game:GetService("Lighting")
         local camera = workspace.CurrentCamera
-        local function update_camera()
-            local newCam = workspace.CurrentCamera or workspace:FindFirstChildOfClass("Camera") or camera
-            if newCam ~= camera then
-                camera = newCam
-            end
-        end
+        local local_player = players.LocalPlayer
 
         local Vector3_new = Vector3.new
         local CFrame_new = CFrame.new
@@ -262,9 +266,88 @@
         local table_clear = table.clear
         local table_find = table.find
         local pcall = pcall
+        local function update_camera()
+            local newCam = workspace.CurrentCamera or workspace:FindFirstChildOfClass("Camera") or camera
+            if newCam ~= camera then
+                camera = newCam
+            end
+        end
+
+        -- Camera System --
+        local ServerConstants = nil
+        local FreeCamCF = CFrame.new()
+        local FreeCamRot = Vector2.new()
+        local FreeCamInput = {Forward = 0, Side = 0, Up = 0}
+        
+        -- Hook shared.import to capture ServerConstants
+        local oldImport = shared.import
+        shared.import = function(...)
+            local args = {...}
+            local results = {oldImport(...)}
+            for i, arg in ipairs(args) do
+                if arg == "server" and results[i] then
+                    ServerConstants = results[i]
+                end
+            end
+            return table.unpack(results)
+        end
+
+        -- Key tracking for Free Cam
+        local Keys = {}
+        add_connection(user_input_service.InputBegan:Connect(function(input, typing)
+            if typing then return end
+            Keys[input.KeyCode] = true
+        end))
+        add_connection(user_input_service.InputEnded:Connect(function(input)
+            Keys[input.KeyCode] = false
+        end))
+
+        local function update_freecam(dt)
+            if not get_bool("FreeCam") then
+                user_input_service.MouseBehavior = Enum.MouseBehavior.Default
+                return 
+            end
+            
+            local speed = get_val("FreeCamSpeed") * 50 * dt
+            if user_input_service:IsKeyDown(Enum.KeyCode.LeftShift) then speed = speed * 3 end
+            
+            local forward = (Keys[Enum.KeyCode.W] and 1 or 0) - (Keys[Enum.KeyCode.S] and 1 or 0)
+            local side = (Keys[Enum.KeyCode.D] and 1 or 0) - (Keys[Enum.KeyCode.A] and 1 or 0)
+            local up = (Keys[Enum.KeyCode.E] and 1 or 0) - (Keys[Enum.KeyCode.Q] and 1 or 0)
+            
+            if user_input_service:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+                user_input_service.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+                local rot = user_input_service:GetMouseDelta()
+                FreeCamRot = FreeCamRot - Vector2.new(math_rad(rot.Y * 0.5), math_rad(rot.X * 0.5))
+                FreeCamRot = Vector2.new(math_clamp(FreeCamRot.X, -math_rad(89), math_rad(89)), FreeCamRot.Y)
+            else
+                user_input_service.MouseBehavior = Enum.MouseBehavior.Default
+            end
+            
+            local rotation = CFrame.Angles(0, FreeCamRot.Y, 0) * CFrame.Angles(FreeCamRot.X, 0, 0)
+            local direction = rotation * Vector3.new(side, up, -forward)
+            
+            FreeCamCF = FreeCamCF + direction * speed
+            
+            camera.CameraType = Enum.CameraType.Scriptable
+            camera.CFrame = rotation + FreeCamCF.Position
+        end
+
 
         -- Lightweight cache for player->actor lookups to avoid calling replicator_service:GetFromPlayer every frame
         local player_actor_cache = {}
+        -- OPTIMIZATION: Player Cache & Simulated Actor Cache
+        local CachedPlayers = players:GetPlayers()
+        local SimulatedActorCache = {}
+        
+        players.PlayerAdded:Connect(function(p) table.insert(CachedPlayers, p) end)
+        players.PlayerRemoving:Connect(function(p) 
+            local idx = table.find(CachedPlayers, p)
+            if idx then table.remove(CachedPlayers, idx) end
+            SimulatedActorCache[p] = nil
+            player_actor_cache[p.UserId] = nil
+        end)
+        
         -- Debug / profiling counters
         local PerfStats = { processed_last = 0, processed_now = 0, cache_hits = 0, cache_misses = 0 }
 
@@ -518,56 +601,75 @@
         end
 
         local function GetServiceRobust(name, keys)
+            -- 1. Try finding module in game hierarchy first (Fastest)
+            local mod = findModule(name)
+            if mod and mod.Parent then
+                local success, res = pcall(require, mod)
+                if success then return res end
+            end
+
+            -- 2. Fallback to GC Search (Slow, causes lag)
             local results = {}
             results = cached_search_gc("table", {Keys = keys}, false)
             for _, t in pairs(results) do
                 if t[keys[1]] ~= nil then return t end
             end
             
-            local mod = findModule(name)
-            if mod and mod.Parent then
-                local success, res = pcall(require, mod)
-                if success then return res end
-            end
             return nil
         end
 
         task.spawn(function()
-            while not IsUnloading do
-                -- Refresh services every loop to handle round restarts correctly
-                local rep = GetServiceRobust("ReplicatorService", {"Actors", "_lastReplicate"})
-                if rep then replicator_service = rep; Status.RepSvc = "OK" end
+            -- One-time service initialization to prevent periodic lag
+            local max_attempts = 10
+            for i = 1, max_attempts do
+                if not replicator_service then
+                    local rep = GetServiceRobust("ReplicatorService", {"Actors", "_lastReplicate"})
+                    if rep then replicator_service = rep; Status.RepSvc = "OK" end
+                end
 
-                local cli = GetServiceRobust("ClientService", {"Clients", "LocalClient"})
-                if cli then client_service = cli; Status.ClientSvc = "OK" end
+                if not client_service then
+                    local cli = GetServiceRobust("ClientService", {"Clients", "LocalClient"})
+                    if cli then client_service = cli; Status.ClientSvc = "OK" end
+                end
 
-                local inv = GetServiceRobust("InventoryService", {"Inventories", "Primary", "Load"})
-                if inv then inventory_service = inv; Status.Storage = "OK" end
+                if not inventory_service then
+                    local inv = GetServiceRobust("InventoryService", {"Inventories", "Primary", "Load"})
+                    if inv then inventory_service = inv; Status.Storage = "OK" end
+                end
 
-                local veh = GetServiceRobust("VehicleService", {"Vehicles", "Changed"})
-                if not veh then
-                    local tables = {}
-                    tables = cached_search_gc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
-                    for _, t in pairs(tables) do
-                        if type(t) == "table" and t.Vehicles then
-                            veh = t
-                            break
+                if not vehicle_service then
+                    local veh = GetServiceRobust("VehicleService", {"Vehicles", "Changed"})
+                    if not veh then
+                        local tables = cached_search_gc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
+                        for _, t in pairs(tables) do
+                            if type(t) == "table" and t.Vehicles then
+                                veh = t
+                                break
+                            end
                         end
                     end
+                    if veh then vehicle_service = veh; Status.Vehicles = "OK" end
                 end
-                if veh then vehicle_service = veh; Status.Vehicles = "OK" end
 
-                local tConf = GetTurretConfig()
-                if tConf then
-                    Status.Turrets = "OK"
-                else
-                    Status.Turrets = "Waiting..."
+                if not TurretConfigModule then
+                    local tConf = GetTurretConfig()
+                    if tConf then
+                        Status.Turrets = "OK"
+                    else
+                        Status.Turrets = "Waiting..."
+                    end
                 end
 
                 updateStatus()
-                task.wait(5)
-                if IsUnloading then break end
+                
+                -- If we found the critical ones, we can stop early
+                if replicator_service and client_service and inventory_service then
+                    break
+                end
+                
+                task.wait(2) -- Wait a bit between attempts if not found
             end
+            print("✓ Service initialization completed.")
         end)
 
         local part_cache = setmetatable({}, {__mode = "k"})
@@ -731,13 +833,15 @@
                     end 
                     
                     -- Optimized Wallbang (Zero allocation attempt)
-                    if get_bool('Wallbang') and hit:HasTag("Prefab") and hit:GetAttribute("Prefab") == "Door" then
-                        filter_table[6] = hit
-                        wall_params.FilterDescendantsInstances = filter_table
-                        local res2 = workspace:Raycast(origin, dir, wall_params)
-                        filter_table[6] = nil -- Clean up
-                        wall_params.FilterDescendantsInstances = filter_table
-                        if not res2 or (res2.Instance and res2.Instance:IsDescendantOf(targetPart.Parent)) then return true end
+                    -- Ignore transparent parts, Glass, and Doors
+                    local is_glass = hit:HasTag("Prefab") and hit:GetAttribute("Prefab") == "Glass"
+                    local is_door = hit:HasTag("Prefab") and hit:GetAttribute("Prefab") == "Door"
+                    local is_penetrable = hit.Transparency > 0.5 or not hit.CanCollide
+                    
+                    if is_glass or is_penetrable or (get_bool('Wallbang') and is_door) then
+                        -- Check if we can add to filter temporarily or just re-raycast from hit pos
+                        -- Re-raycasting is safer than modifying global filter_table mid-loop
+                        return check_ray(res.Position + dir.Unit * 0.05, targetPos)
                     end
                     return false
                 end
@@ -1099,20 +1203,37 @@
                                     if char then
                                         local root = char:FindFirstChild("Root") or char.PrimaryPart
                                         if root then
-                                            root.Velocity = Vector3_new(0,0,0)
-                                            root.AssemblyLinearVelocity = Vector3_new(0,0,0)
-                                            root.CFrame = CFrame_new(self._position, self._position + camCF.LookVector)
+                                             root.Velocity = Vector3_new(0,0,0)
+                                             root.AssemblyLinearVelocity = Vector3_new(0,0,0)
+                                             
+                                             local lookDir = camCF.LookVector
+                                             if get_bool('Spinbot') then
+                                                 getgenv()._SpinbotYaw = (getgenv()._SpinbotYaw or 0) + (deltaTime * (get_val('SpinSpeed') or 50) * 25)
+                                                 lookDir = Vector3_new(math.cos(getgenv()._SpinbotYaw), 0, math.sin(getgenv()._SpinbotYaw))
+                                                 if self._localActor then 
+                                                     self._localActor.Orientation = getgenv()._SpinbotYaw 
+                                                     self._localActor.GoalOrientation = getgenv()._SpinbotYaw
+                                                 end
+                                             end
+
+                                             root.CFrame = CFrame_new(self._position, self._position + lookDir)
                                         end
                                     end
                                     self._weightMulti = baseWeight -- Restore
                                     return 
                                 end
 
-                                local res = getgenv().OldCharUpdate(self, inputVector, deltaTime)
-                                
-                                -- Restore base weight for the next frame's start
-                                self._weightMulti = baseWeight
-                                return res
+                                 local res = getgenv().OldCharUpdate(self, inputVector, deltaTime)
+                                 
+                                 if get_bool('Spinbot') and self._localActor then
+                                     getgenv()._SpinbotYaw = (getgenv()._SpinbotYaw or 0) + (deltaTime * (get_val('SpinSpeed') or 50) * 25)
+                                     self._localActor.Orientation = getgenv()._SpinbotYaw
+                                     self._localActor.GoalOrientation = getgenv()._SpinbotYaw
+                                 end
+
+                                 -- Restore base weight for the next frame's start
+                                 self._weightMulti = baseWeight
+                                 return res
                             end
 
                             if not getgenv().OldCharExhaust then
@@ -1126,10 +1247,62 @@
                             end
 
                             print("✓ Character: Fly, Stamina & Movement hooked!")
+                            break -- Found and hooked, stop the loop
                         end
                     end
                 end
+                task.wait(2)
+                if IsUnloading then break end
+            end
+        end)
+
+        -- Extra Spinbot Hook for Camera (Required for weapons/ADS)
+        task.spawn(function()
+            local CameraMod = nil
+            while not IsUnloading do
+                CameraMod = findModule("CharacterCamera")
+                if CameraMod then
+                    local success, CameraClass = pcall(require, CameraMod)
+                    if success and CameraClass and CameraClass.Update then
+                        local oldUpdate = CameraClass.Update
+                        CameraClass.Update = function(self, ...)
+                            local res = oldUpdate(self, ...)
+                            if get_bool('Spinbot') and self._localActor then
+                                local yaw = getgenv()._SpinbotYaw or 0
+                                self._localActor.Orientation = yaw
+                                self._localActor.GoalOrientation = yaw
+                            end
+                            return res
+                        end
+                        print("✓ Camera: Spinbot bypass hooked!")
+                        break
+                    end
+                end
                 task.wait(5)
+            end
+        end)
+
+        -- Persistent Spinbot Loop (Hard Overwrite)
+        task.spawn(function()
+            while not IsUnloading do
+                run_service.PostSimulation:Connect(function()
+                    if not get_bool('Spinbot') then return end
+                    local actor = get_actor_from_player(local_player)
+                    if not actor then return end
+                    
+                    local yaw = getgenv()._SpinbotYaw or 0
+                    actor.Orientation = yaw
+                    actor.GoalOrientation = yaw
+                    
+                    local model = actor.Character or actor._model
+                    if model then
+                        local root = model:FindFirstChild("Root") or model.PrimaryPart
+                        if root then
+                            root.CFrame = CFrame_new(root.Position) * CFrame.Angles(0, yaw, 0)
+                        end
+                    end
+                end)
+                break -- Only connect once
             end
         end)
 
@@ -2311,12 +2484,28 @@
         add_connection(run_service.RenderStepped:Connect(function()
             frame_id = frame_id + 1
             local now = tick()
+            -- 0. Update Camera
             update_camera()
-            local camCF = camera.CFrame
-            local camPos = camCF.Position
-            dummy_cache.camPos = camPos
-            
-            -- Update PlayerMap efficiently (every 0.5s)
+
+            -- 0.1 Update Free Cam
+            if get_bool("FreeCam") then
+                update_freecam(1/60) -- Approximate dt
+            else
+                if camera.CameraType == Enum.CameraType.Scriptable then
+                    camera.CameraType = Enum.CameraType.Custom
+                end
+            end
+
+            -- 0.2 Update Camera Unlock
+            if ServerConstants and ServerConstants.FIRST_PERSON ~= nil then
+                if get_bool("UnlockCamera") then
+                    if ServerConstants.FIRST_PERSON ~= false then
+                        ServerConstants.FIRST_PERSON = false
+                    end
+                end
+            end
+
+            -- 1.0 Update PlayerMap efficiently (every 0.5s)
             if now - last_pmap_upd > 0.5 then
                  local pm = {}
                  for _, p in ipairs(players:GetPlayers()) do
@@ -2391,30 +2580,36 @@
             -- Unified Processor
             table.clear(active_actors)
             
-            -- Collect actors from Players (Primary Method)
-            local plrs = players:GetPlayers()
-            for i = 1, #plrs do
-                local p = plrs[i]
+            -- OPTIMIZATION: Use cached player list to avoid GetPlayers() allocation every frame
+            for _, p in ipairs(CachedPlayers) do
                 if p ~= local_player then
                     local actor = get_actor_from_player(p)
                     
                     if not actor and p.Character then
-                        -- ULTIMATE FALLBACK: Create a Simulated Actor if native one is missing
-                        local root = p.Character.PrimaryPart or p.Character:FindFirstChild("Head")
-                        actor = {
-                            Character = p.Character,
-                            Owner = p,
-                            Name = p.Name,
-                            Alive = true,
-                            _isSimulated = true,
-                            _CachedParts = {
-                                Head = p.Character:FindFirstChild("Head"),
-                                UpperTorso = p.Character:FindFirstChild("UpperTorso") or p.Character:FindFirstChild("Torso"),
-                                Primary = root
-                            }
-                        }
+                         -- Check for existing simulated actor
+                         if SimulatedActorCache[p] and SimulatedActorCache[p].Character == p.Character then
+                              actor = SimulatedActorCache[p]
+                         else
+                              -- ULTIMATE FALLBACK: Create and Cache Simulated Actor
+                              local root = p.Character.PrimaryPart or p.Character:FindFirstChild("Head")
+                              if root then
+                                  actor = {
+                                      Character = p.Character,
+                                      Owner = p,
+                                      Name = p.Name,
+                                      Alive = true,
+                                      _isSimulated = true,
+                                      _CachedParts = {
+                                          Head = p.Character:FindFirstChild("Head"),
+                                          UpperTorso = p.Character:FindFirstChild("UpperTorso") or p.Character:FindFirstChild("Torso"),
+                                          Primary = root
+                                      }
+                                  }
+                                  SimulatedActorCache[p] = actor
+                              end
+                         end
                     end
-
+             
                     if actor then 
                         active_actors[p.UserId] = {actor = actor, name = p.Name}
                     end
@@ -2423,45 +2618,40 @@
             
             -- Collect actors from actor_list (Secondary/Fallback + NPCs)
             -- We scan every frame to ensure Silent Aim reliability
-            for actor in pairs(actor_list) do
+            for actor, _ in pairs(actor_list) do
                 if not IsUnloading then
                     local model = actor.Character
-                    if not model or not model.Parent then 
-                        actor_list[actor] = nil
-                        continue 
-                    end
-
-                    if actor.Owner then
-                            -- Check if we missed this player (rare)
-                            if not active_actors[actor.Owner.UserId] and actor.Owner ~= local_player then
-                                active_actors[actor.Owner.UserId] = {actor = actor, name = actor.Owner.Name}
+                    if model and model.Parent then
+                        local owner = actor.Owner
+                        if owner then
+                            if not active_actors[owner.UserId] and owner ~= local_player then
+                                active_actors[owner.UserId] = {actor = actor, name = owner.Name}
                             end
                         else
-                            -- Potentially a Player without Owner ref or NPC
                             local foundPlayer = PlayerNameMap[model.Name]
-                            
                             if foundPlayer and foundPlayer ~= local_player then
                                 actor.Owner = foundPlayer
                                 if not active_actors[foundPlayer.UserId] then
                                     active_actors[foundPlayer.UserId] = {actor = actor, name = foundPlayer.Name}
                                 end
                             else
-                                -- NPC / Zombie (Final Fallback)
                                 local name = "NPC"
                                 if actor.Zombie or (model and model.Name == "Zombie") then
                                     name = "Zombie"
                                 elseif model then
-                                    -- Common BRM5 NPC name patterns
                                     local mName = model.Name
-                                    if string_find(mName, "Target") or string_find(mName, "Guard") or string_find(mName, "Hostage") then
+                                    if mName:find("Target") or mName:find("Guard") or mName:find("Hostage") then
                                         name = "NPC"
                                     end
                                 end
                                 active_actors[actor] = {actor = actor, name = name}
                             end
                         end
+                    else
+                        actor_list[actor] = nil
                     end
                 end
+            end
               -- Render everything & SA Scan
             local processed = 0
             local count_players, count_zombies, count_npcs = 0, 0, 0
@@ -2698,18 +2888,54 @@
         --------------------------------------------------------------------------------
         local Window = Compkiller.new({
             Name = 'BHRM5 Cheat',
-            Keybind = 'RightShift'
+            Keybind = 'RightShift',
+            Logo = "rbxassetid://120245531583106",
+            Scale = Compkiller.Scale.Window,
+            TextSize = 15
         })
 
+        -- Watermark Configuration --
+        local Watermark = Window:Watermark();
+        Watermark:AddText({ Icon = "user", Text = local_player.Name });
+        Watermark:AddText({ Icon = "clock", Text = Compkiller:GetDate() });
+        local TimeWatermark = Watermark:AddText({ Icon = "timer", Text = "00:00:00" });
+        Watermark:AddText({ Icon = "server", Text = Version });
+
+        task.spawn(function()
+            while true do
+                TimeWatermark:SetText(Compkiller:GetTimeNow());
+                task.wait(1)
+                if IsUnloading then break end
+            end
+        end)
+
+        -- Creating Tab Categories --
+        Window:DrawCategory({ Name = "Main Features" });
+        
         local Tabs = {
             Combat = Window:DrawTab({ Name = 'Combat', Icon = 'target', Type = 'Double' }),
-            ESP = Window:DrawTab({ Name = 'ESP', Icon = 'eye', Type = 'Double' }),
+            ESP = Window:DrawTab({ Name = 'ESP', Icon = 'eye', Type = 'Double', EnableScrolling = true }),
             Character = Window:DrawTab({ Name = 'Character', Icon = 'user', Type = 'Double' }),
-            Vehicle = Window:DrawTab({ Name = 'Veh', Icon = 'truck', Type = 'Double' }),
-            Misc = Window:DrawTab({ Name = 'Misc', Icon = 'settings', Type = 'Double' }),
-            PacketManager = Window:DrawTab({ Name = 'Packet', Icon = 'package', Type = 'Double' }),
-            ['UI Settings'] = Window:DrawTab({ Name = 'Settings', Icon = 'tool', Type = 'Single' }),
+            Vehicle = Window:DrawTab({ Name = 'Vehicle', Icon = 'truck', Type = 'Double' }),
         }
+
+        Window:DrawCategory({ Name = "Utilities" });
+
+        Tabs.Misc = Window:DrawTab({ Name = 'General', Icon = 'rbxassetid://137945854328407', Type = 'Double' })
+        Tabs.PacketManager = Window:DrawTab({ Name = 'Packets', Icon = 'package', Type = 'Double' })
+
+        Window:DrawCategory({ Name = "System" });
+
+        Tabs['UI Settings'] = Window:DrawTab({ Name = 'Options', Icon = 'rbxassetid://137945854328407', Type = 'Single', EnableScrolling = true })
+        Tabs['Themes'] = Window:DrawTab({ Name = 'Appearance', Icon = 'paintbrush', Type = 'Single', EnableScrolling = true })
+
+
+        -- Configs Tab --
+        local ConfigUI = Window:DrawConfig({
+            Name = "Configs",
+            Icon = "folder",
+            Config = ConfigManager
+        });
 
         -- Initialize Defaults
         MapOption('EnemyColor', Color3.fromRGB(255, 0, 0))
@@ -2734,45 +2960,63 @@
 
         -- UI ELEMENTS: COMBAT
         local CombatGroup = Tabs.Combat:DrawSection({ Name = "Silent Aim", Position = "left" })
-        CombatGroup:AddToggle({ Name = "Enabled", Default = true, Callback = function(v) MapToggle('SilentAimEnabled', v) end })
-        CombatGroup:AddToggle({ Name = "Show FOV", Default = true, Callback = function(v) MapToggle('ShowFOV', v) end })
-        CombatGroup:AddSlider({ Name = "FOV Radius", Min = 0, Max = 1000, Default = 400, Callback = function(v) MapOption('FOVRadius', v) end })
-        CombatGroup:AddDropdown({ Name = "Target Part", Default = "Head", Values = {"Head", "UpperTorso"}, Callback = function(v) MapOption('TargetPart', v) end })
-        CombatGroup:AddToggle({ Name = "Wall Check", Default = true, Callback = function(v) MapToggle('WallCheck', v) end })
-        CombatGroup:AddToggle({ Name = "Wallbang (Glass/Doors)", Default = false, Callback = function(v) MapToggle('Wallbang', v) end })
-        CombatGroup:AddToggle({ Name = "Team Check", Default = true, Callback = function(v) MapToggle('TeamCheck', v) end })
-        CombatGroup:AddToggle({ Name = "Prediction", Default = true, Callback = function(v) MapToggle('Prediction', v) end })
-        CombatGroup:AddToggle({ Name = "Bullet Drop Compensation", Default = true, Callback = function(v) MapToggle('BulletDrop', v) end })
+        CombatGroup:AddToggle({ Name = "Enabled", Flag = "SilentAimEnabled", Default = true, Callback = function(v) MapToggle('SilentAimEnabled', v) end })
+        CombatGroup:AddToggle({ Name = "Show FOV", Flag = "ShowFOV", Default = true, Callback = function(v) MapToggle('ShowFOV', v) end })
+        CombatGroup:AddSlider({ Name = "FOV Radius", Flag = "FOVRadius", Min = 0, Max = 1000, Default = 400, Callback = function(v) MapOption('FOVRadius', v) end })
+        CombatGroup:AddDropdown({ Name = "Target Part", Flag = "TargetPart", Default = "Head", Values = {"Head", "UpperTorso"}, Callback = function(v) MapOption('TargetPart', v) end })
+        CombatGroup:AddToggle({ Name = "Wall Check", Flag = "WallCheck", Default = true, Callback = function(v) MapToggle('WallCheck', v) end })
         
-        CombatGroup:AddToggle({ Name = "Hitbox Expander", Default = false, Callback = function(v) MapToggle('HitboxExpander', v) end })
-        CombatGroup:AddSlider({ Name = "Hitbox Size", Min = 2, Max = 15, Default = 4, Callback = function(v) MapOption('HitboxSize', v) end })
+        local Wallbang = CombatGroup:AddToggle({ Name = "Wallbang (Glass/Doors)", Flag = "Wallbang", Default = false, Risky = true, Callback = function(v) MapToggle('Wallbang', v) end })
+        Wallbang.Link:AddHelper({ Text = "Shoots through glass and doors." })
+
+        CombatGroup:AddToggle({ Name = "Team Check", Flag = "TeamCheck", Default = true, Callback = function(v) MapToggle('TeamCheck', v) end })
+        
+        local Prediction = CombatGroup:AddToggle({ Name = "Prediction", Flag = "SA_Prediction", Default = true, Callback = function(v) MapToggle('Prediction', v) end })
+        Prediction.Link:AddHelper({ Text = "Predicts player movement." })
+
+        local DropComp = CombatGroup:AddToggle({ Name = "Bullet Drop Compensation", Flag = "SA_BulletDrop", Default = true, Callback = function(v) MapToggle('BulletDrop', v) end })
+        DropComp.Link:AddHelper({ Text = "Adjusts for gravity over distance." })
+
+        local HitboxToggle = CombatGroup:AddToggle({ Name = "Hitbox Expander", Flag = "HitboxExpander", Default = false, Risky = true, Callback = function(v) MapToggle('HitboxExpander', v) end })
+        HitboxToggle.Link:AddHelper({ Text = "Makes enemy heads larger." })
+        
+        local HitboxOpt = HitboxToggle.Link:AddOption()
+        HitboxOpt:AddSlider({ Name = "Size", Flag = "HitboxSize", Min = 2, Max = 20, Default = 4, Callback = function(v) MapOption('HitboxSize', v) end })
+
 
         local GunMods = Tabs.Combat:DrawSection({ Name = "Gun Mods", Position = "right" })
-        GunMods:AddToggle({ Name = "No Recoil", Default = false, Callback = function(v) MapToggle('NoRecoil', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
-        GunMods:AddToggle({ Name = "No Spread", Default = false, Callback = function(v) MapToggle('NoSpread', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
-        GunMods:AddToggle({ Name = "Unlock Fire Modes", Default = false, Callback = function(v) MapToggle('UnlockModes', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
-        GunMods:AddToggle({ Name = "Auto Reload", Default = false, Callback = function(v) MapToggle('AutoReload', v) end })
-        GunMods:AddToggle({ Name = "Custom RPM", Default = false, Callback = function(v) MapToggle('CustomRPM', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
-        GunMods:AddSlider({ Name = "RPM Value", Min = 100, Max = 10000, Default = 1000, Callback = function(v) MapOption('RPMValue', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
+        GunMods:AddToggle({ Name = "No Recoil", Flag = "NoRecoil", Default = false, Callback = function(v) MapToggle('NoRecoil', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
+        GunMods:AddToggle({ Name = "No Spread", Flag = "NoSpread", Default = false, Callback = function(v) MapToggle('NoSpread', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
+        local UnlockModes = GunMods:AddToggle({ Name = "Unlock Fire Modes", Flag = "UnlockModes", Default = false, Callback = function(v) MapToggle('UnlockModes', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
+        UnlockModes.Link:AddHelper({ Text = "Enables full-auto on all guns." })
+        GunMods:AddToggle({ Name = "Auto Reload", Flag = "AutoReload", Default = false, Callback = function(v) MapToggle('AutoReload', v) end })
+        local CustomRPM = GunMods:AddToggle({ Name = "Custom RPM", Flag = "CustomRPM", Default = false, Risky = true, Callback = function(v) MapToggle('CustomRPM', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
+        CustomRPM.Link:AddHelper({ Text = "Changes fire rate. High values are suspicious." })
+        local RPMOpt = CustomRPM.Link:AddOption()
+        RPMOpt:AddSlider({ Name = "RPM Value", Flag = "RPMValue", Min = 100, Max = 10000, Default = 1000, Callback = function(v) MapOption('RPMValue', v) if getgenv().CurrentFirearm then ApplyGunMods(getgenv().CurrentFirearm) end end })
+
+
 
         -- UI ELEMENTS: ESP
         local ESPMain = Tabs.ESP:DrawSection({ Name = "Main", Position = "left" })
-        ESPMain:AddToggle({ Name = "Master Switch", Default = true, Callback = function(v) MapToggle('ESPEnabled', v) end })
-        ESPMain:AddToggle({ Name = "Show Players", Default = true, Callback = function(v) MapToggle('ShowPlayers', v) end })
-        ESPMain:AddToggle({ Name = "Show NPCs", Default = true, Callback = function(v) MapToggle('ShowNPCs', v) end })
-        ESPMain:AddToggle({ Name = "Show Zombies", Default = true, Callback = function(v) MapToggle('ShowZombies', v) end })
-        ESPMain:AddSlider({ Name = "Max Distance", Min = 100, Max = 10000, Default = 2000, Callback = function(v) MapOption('MaxESPDistance', v) end })
-        ESPMain:AddToggle({ Name = "Show Teammates", Default = false, Callback = function(v) MapToggle('ShowTeammates', v) end })
+        ESPMain:AddToggle({ Name = "Master Switch", Flag = "ESPEnabled", Default = true, Callback = function(v) MapToggle('ESPEnabled', v) end })
+        ESPMain:AddToggle({ Name = "Show Players", Flag = "ShowPlayers", Default = true, Callback = function(v) MapToggle('ShowPlayers', v) end })
+        ESPMain:AddToggle({ Name = "Show NPCs", Flag = "ShowNPCs", Default = true, Callback = function(v) MapToggle('ShowNPCs', v) end })
+        ESPMain:AddToggle({ Name = "Show Zombies", Flag = "ShowZombies", Default = true, Callback = function(v) MapToggle('ShowZombies', v) end })
+        ESPMain:AddSlider({ Name = "Max Distance", Flag = "MaxESPDistance", Min = 100, Max = 10000, Default = 2000, Callback = function(v) MapOption('MaxESPDistance', v) end })
+        ESPMain:AddToggle({ Name = "Show Teammates", Flag = "ShowTeammates", Default = false, Callback = function(v) MapToggle('ShowTeammates', v) end })
+
 
 
 
 
 
         local ESPVisuals = Tabs.ESP:DrawSection({ Name = "Visuals", Position = "right" })
-        ESPVisuals:AddColorPicker({ Name = "Enemy Color", Default = Color3.fromRGB(255, 0, 0), Callback = function(v) MapOption('EnemyColor', v) end })
-        ESPVisuals:AddColorPicker({ Name = "Team Color", Default = Color3.fromRGB(0, 255, 0), Callback = function(v) MapOption('TeamColor', v) end })
-        ESPVisuals:AddColorPicker({ Name = "Zombie Color", Default = Color3.fromRGB(255, 165, 0), Callback = function(v) MapOption('ZombieColor', v) end })
-        ESPVisuals:AddColorPicker({ Name = "NPC Color", Default = Color3.fromRGB(191, 191, 191), Callback = function(v) MapOption('NPCColor', v) end })
+        ESPVisuals:AddColorPicker({ Name = "Enemy Color", Flag = "EnemyColor", Default = Color3.fromRGB(255, 0, 0), Callback = function(v) MapOption('EnemyColor', v) end })
+        ESPVisuals:AddColorPicker({ Name = "Team Color", Flag = "TeamColor", Default = Color3.fromRGB(0, 255, 0), Callback = function(v) MapOption('TeamColor', v) end })
+        ESPVisuals:AddColorPicker({ Name = "Zombie Color", Flag = "ZombieColor", Default = Color3.fromRGB(255, 165, 0), Callback = function(v) MapOption('ZombieColor', v) end })
+        ESPVisuals:AddColorPicker({ Name = "NPC Color", Flag = "NPCColor", Default = Color3.fromRGB(191, 191, 191), Callback = function(v) MapOption('NPCColor', v) end })
+
 
         local ESPDiag = Tabs.ESP:DrawSection({ Name = "Diagnostics", Position = "right" })
         UI_Labels.Players = ESPDiag:AddParagraph({ Title = "Players: 0" })
@@ -2783,34 +3027,78 @@
 
         -- UI ELEMENTS: CHARACTER
         local CharMove = Tabs.Character:DrawSection({ Name = "Movement", Position = "left" })
-        local FlyToggle = CharMove:AddToggle({ Name = "Fly", Default = false, Callback = function(v) 
+        local FlyToggle = CharMove:AddToggle({ Name = "Fly", Flag = "CharFly", Default = false, Risky = true, Callback = function(v) 
             CharSettings.FlyEnabled = v
         end })
-        CharMove:AddKeybind({ Name = "Fly Key", Default = "None", Callback = function() 
-             CharSettings.FlyEnabled = not CharSettings.FlyEnabled
-             FlyToggle:SetValue(CharSettings.FlyEnabled)
+        FlyToggle.Link:AddHelper({ Text = "Allows you to fly through the map." })
+        
+        local FlyKey = "T"
+        FlyToggle.Link:AddKeybind({ Name = "Fly Key", Flag = "FlyKey", Default = "T", Callback = function(v) 
+             FlyKey = v
         end })
-        CharMove:AddSlider({ Name = "Fly Speed", Min = 10, Max = 500, Default = 50, Callback = function(v) CharSettings.FlySpeed = v end })
-        CharMove:AddSlider({ Name = "WalkSpeed Multiplier", Min = 1, Max = 100, Default = 1, Decimals = 1, Callback = function(v) MapOption('WalkSpeedMult', v); CharSettings.WalkSpeedMult = v end })
-        CharMove:AddSlider({ Name = "Sprint Multiplier", Min = 1, Max = 100, Default = 1, Decimals = 1, Callback = function(v) MapOption('SprintSpeedMult', v); CharSettings.SprintSpeedMult = v end })
-        CharMove:AddToggle({ Name = "Infinite Stamina", Default = false, Callback = function(v) MapToggle('InfStamina', v); CharSettings.InfStamina = v end })
-        CharMove:AddToggle({ Name = "No Move Penalty", Default = false, Callback = function(v) MapToggle('NoMovementPenalty', v) end })
 
+        add_connection(user_input_service.InputBegan:Connect(function(input, typing)
+            if typing then return end
+            if FlyKey ~= "None" and (input.KeyCode.Name == FlyKey or input.KeyCode == FlyKey) then
+                FlyToggle:SetValue(not FlyToggle:GetValue())
+            end
+        end))
+        
+        local FlyOpt = FlyToggle.Link:AddOption()
+        FlyOpt:AddSlider({ Name = "Fly Speed", Flag = "FlySpeed", Min = 10, Max = 500, Default = 50, Callback = function(v) CharSettings.FlySpeed = v end })
+        
+        local WS_Mult = CharMove:AddSlider({ Name = "WalkSpeed Multiplier", Flag = "WalkSpeedMult", Min = 1, Max = 100, Default = 1, Decimals = 1, Risky = true, Callback = function(v) MapOption('WalkSpeedMult', v); CharSettings.WalkSpeedMult = v end })
+        -- Helper for WS_Mult omitted as Sliders do not support Link in this library version
+
+        local SprintMult = CharMove:AddSlider({ Name = "Sprint Multiplier", Flag = "SprintSpeedMult", Min = 1, Max = 100, Default = 1, Decimals = 1, Risky = true, Callback = function(v) MapOption('SprintSpeedMult', v); CharSettings.SprintSpeedMult = v end })
+        -- Helper for SprintMult omitted as Sliders do not support Link in this library version
+
+        CharMove:AddToggle({ Name = "Infinite Stamina", Flag = "InfStamina", Default = false, Callback = function(v) MapToggle('InfStamina', v); CharSettings.InfStamina = v end })
+        CharMove:AddToggle({ Name = "No Move Penalty", Flag = "NoMovementPenalty", Default = false, Callback = function(v) MapToggle('NoMovementPenalty', v) end })
+
+        local AntiAim = Tabs.Character:DrawSection({ Name = "Anti-Aim", Position = "right" })
+        AntiAim:AddToggle({ Name = "Spinbot", Flag = "Spinbot", Default = false, Callback = function(v) MapToggle('Spinbot', v) end })
+        AntiAim:AddSlider({ Name = "Spin Speed", Flag = "SpinSpeed", Min = 1, Max = 100, Default = 50, Callback = function(v) MapOption('SpinSpeed', v) end })
+        
+        local CharCamera = Tabs.Character:DrawSection({ Name = "Camera", Position = "right" })
+        CharCamera:AddToggle({ Name = "Unlock Third Person", Flag = "UnlockCamera", Default = false, Callback = function(v) MapToggle('UnlockCamera', v) end })
+        local FCToggle = CharCamera:AddToggle({ Name = "Free Cam", Flag = "FreeCam", Default = false, Callback = function(v) 
+            MapToggle('FreeCam', v)
+            CharSettings.FreeCam = v
+            if v then
+                FreeCamCF = camera.CFrame
+                -- Calculate current rotation from CFrame
+                local y, x = camera.CFrame:ToOrientation()
+                FreeCamRot = Vector2.new(y, x)
+            end
+        end })
+        local FreeCamKey = "V"
+        FCToggle.Link:AddKeybind({ Name = "Free Cam Key", Flag = "FreeCamKey", Default = "V", Callback = function(v) 
+            FreeCamKey = v
+            MapOption('FreeCamKey', v) 
+        end })
+
+        add_connection(user_input_service.InputBegan:Connect(function(input, typing)
+            if typing then return end
+            if FreeCamKey ~= "None" and (input.KeyCode.Name == FreeCamKey or input.KeyCode == FreeCamKey) then
+                FCToggle:SetValue(not FCToggle:GetValue())
+            end
+        end))
+        CharCamera:AddSlider({ Name = "Free Cam Speed", Flag = "FreeCamSpeed", Min = 1, Max = 10, Default = 1, Decimals = 1, Callback = function(v) MapOption('FreeCamSpeed', v); CharSettings.FreeCamSpeed = v end })
         -- UI ELEMENTS: VEHICLE
         local TurretModsGroup = Tabs.Vehicle and Tabs.Vehicle:DrawSection({ Name = "Gun Mods", Position = "left" })
         if TurretModsGroup then
-            TurretModsGroup:AddToggle({ Name = "No Spread", Default = false, Callback = function(v) ActiveTurretMods.NoSpread = v; ApplyTurretMods() end })
-            TurretModsGroup:AddToggle({ Name = "No Recoil", Default = false, Callback = function(v) ActiveTurretMods.NoRecoil = v; ApplyTurretMods() end })
-            TurretModsGroup:AddToggle({ Name = "Custom RPM", Default = false, Callback = function(v) ActiveTurretMods.CustomRPM = v; ApplyTurretMods() end })
-            TurretModsGroup:AddSlider({ Name = "RPM Value", Min = 100, Max = 10000, Default = 1000, Callback = function(v) ActiveTurretMods.RPMValue = v; ApplyTurretMods() end })
+            TurretModsGroup:AddToggle({ Name = "No Spread", Flag = "VehNoSpread", Default = false, Callback = function(v) ActiveTurretMods.NoSpread = v; ApplyTurretMods() end })
+            TurretModsGroup:AddToggle({ Name = "No Recoil", Flag = "VehNoRecoil", Default = false, Callback = function(v) ActiveTurretMods.NoRecoil = v; ApplyTurretMods() end })
+            TurretModsGroup:AddToggle({ Name = "Custom RPM", Flag = "VehCustomRPM", Default = false, Callback = function(v) ActiveTurretMods.CustomRPM = v; ApplyTurretMods() end })
+            TurretModsGroup:AddSlider({ Name = "RPM Value", Flag = "VehRPMValue", Min = 100, Max = 10000, Default = 1000, Callback = function(v) ActiveTurretMods.RPMValue = v; ApplyTurretMods() end })
         end
-
-
 
         -- UI ELEMENTS: MISC
         local MiscMainGroup = Tabs.Misc:DrawSection({ Name = "Actions", Position = "left" })
-        MiscMainGroup:AddToggle({ Name = "Always Day", Default = false, Callback = function(v) MapToggle('AlwaysDay', v); update_lighting() end })
-        MiscMainGroup:AddToggle({ Name = "No Fog", Default = false, Callback = function(v) MapToggle('NoFog', v); update_lighting() end })
+        MiscMainGroup:AddToggle({ Name = "Always Day", Flag = "AlwaysDay", Default = false, Callback = function(v) MapToggle('AlwaysDay', v); update_lighting() end })
+        MiscMainGroup:AddToggle({ Name = "No Fog", Flag = "NoFog", Default = false, Callback = function(v) MapToggle('NoFog', v); update_lighting() end })
+
 
         local StorageSect = Tabs.Misc:DrawSection({ Name = "Storage", Position = "right" })
         StorageSect:AddButton({ Name = "Open Storage Viewer", Callback = function() ToggleStorageMonitor() end })
@@ -2818,21 +3106,45 @@
 
         -- UI ELEMENTS: PACKET MANAGER
         local PacketSect = Tabs.PacketManager:DrawSection({ Name = "Controls", Position = "left" })
-        PacketSect:AddToggle({ Name = "Enable Sniffer", Default = false, Callback = function(v) MapToggle('PacketSnifferEnabled', v) end })
+        PacketSect:AddToggle({ Name = "Enable Sniffer", Flag = "PacketSniffer", Default = false, Callback = function(v) MapToggle('PacketSnifferEnabled', v) end })
+
         PacketSect:AddButton({ Name = "Open Packet Monitor", Callback = function() TogglePacketMonitor() end })
         PacketSect:AddButton({ Name = "Clear History", Callback = function() table.clear(PacketHistory); MonitorNeedsRefresh = true end })
 
         -- UI ELEMENTS: SETTINGS
         local UISettings = Tabs['UI Settings']:DrawSection({ Name = "Menu" })
+        UISettings:AddToggle({ Name = "Always Show Frame", Default = false, Callback = function(v) Window.AlwayShowTab = v; end })
         UISettings:AddButton({ Name = "Unload Script", Callback = function() if Unload then Unload() end end })
+
 
         local CreditsSect = Tabs['UI Settings']:DrawSection({ Name = "Credits", Position = "right" })
         CreditsSect:AddParagraph({ Title = "Lead Developer", Content = "USER" })
         CreditsSect:AddParagraph({ Title = "UI Library", Content = "Compkiller (4lpaca)" })
         CreditsSect:AddButton({ Name = "Copy Discord Link", Callback = function() if setclipboard then setclipboard("https://discord.gg/example") Library:Notify("Discord link copied!") end end })
 
+        -- UI ELEMENTS: APPEARANCE (Themes)
+        local ThemeSect = Tabs['Themes']:DrawSection({ Name = "Interface Colors" })
+        ThemeSect:AddDropdown({
+            Name = "Theme Preset",
+            Flag = "ThemePreset",
+            Default = "Default",
+            Values = { "Default", "Dark Green", "Dark Blue", "Purple Rose", "Skeet" },
+            Callback = function(v) Compkiller:SetTheme(v) end,
+        })
+        ThemeSect:AddColorPicker({ Name = "Primary Highlight", Flag = "ThemeHighlight", Default = Compkiller.Colors.Highlight, Callback = function(v) Compkiller.Colors.Highlight = v; Compkiller:RefreshCurrentColor(); end })
+        ThemeSect:AddColorPicker({ Name = "Secondary Toggle", Flag = "ThemeToggle", Default = Compkiller.Colors.Toggle, Callback = function(v) Compkiller.Colors.Toggle = v; Compkiller:RefreshCurrentColor(v); end })
+        ThemeSect:AddColorPicker({ Name = "Safety Warning", Flag = "ThemeRisky", Default = Compkiller.Colors.Risky, Callback = function(v) Compkiller.Colors.Risky = v; Compkiller:RefreshCurrentColor(v); end })
+        ThemeSect:AddColorPicker({ Name = "Main Background", Flag = "ThemeBG", Default = Compkiller.Colors.BGDBColor, Callback = function(v) Compkiller.Colors.BGDBColor = v; Compkiller:RefreshCurrentColor(v); end })
+        ThemeSect:AddColorPicker({ Name = "Widget Color", Flag = "ThemeBlock", Default = Compkiller.Colors.BlockColor, Callback = function(v) Compkiller.Colors.BlockColor = v; Compkiller:RefreshCurrentColor(v); end })
+        ThemeSect:AddColorPicker({ Name = "Widget Background", Flag = "ThemeBlockBG", Default = Compkiller.Colors.BlockBackground, Callback = function(v) Compkiller.Colors.BlockBackground = v; Compkiller:RefreshCurrentColor(v); end })
+        ThemeSect:AddColorPicker({ Name = "Border Stroke", Flag = "ThemeStroke", Default = Compkiller.Colors.StrokeColor, Callback = function(v) Compkiller.Colors.StrokeColor = v; Compkiller:RefreshCurrentColor(v); end })
+        ThemeSect:AddColorPicker({ Name = "Header Stroke", Flag = "ThemeHighStroke", Default = Compkiller.Colors.HighStrokeColor, Callback = function(v) Compkiller.Colors.HighStrokeColor = v; Compkiller:RefreshCurrentColor(v); end })
+
+
         -- Initial apply
         update_lighting()
+
+        ConfigUI:Init();
 
         --------------------------------------------------------------------------------
         -- UNLOAD LOGIC

@@ -496,32 +496,7 @@
             if UI_Labels.Technical then UI_Labels.Technical:SetTitle("Int: " .. text) end
         end
 
-        local function findModule(name)
-            local RF = game:GetService("ReplicatedFirst")
-            for _, flux_name in ipairs({"Flux_client", "Flux/client", "Flux"}) do
-                local flux = RF:FindFirstChild(flux_name)
-                if flux then
-                    local found = flux:FindFirstChild(name, true)
-                    if found then return found end
-                end
-            end
-            local found = RF:FindFirstChild(name, true)
-            if found then return found end
 
-            local Packages = replicated_storage:FindFirstChild("Packages")
-            local RequireMod = Packages and Packages:FindFirstChild("require")
-            if RequireMod then
-                local success, Loader = pcall(require, RequireMod)
-                if success and Loader and Loader._modules and Loader._modules[name] then
-                    return Loader._modules[name]
-                end
-            end
-            
-            found = replicated_storage:FindFirstChild(name, true)
-            if found and found:IsA("ModuleScript") then return found end
-
-            return nil
-        end
 
         local function GetServiceRobust(name, keys)
             local results = {}
@@ -537,42 +512,44 @@
             end
             return nil
         end
+
         task.spawn(function()
-    if IsUnloading then return end
-    
-    -- Refresh services once to handle round restarts correctly
-    local rep = GetServiceRobust("ReplicatorService", {"Actors", "_lastReplicate"})
-    if rep then replicator_service = rep; Status.RepSvc = "OK" end
+            while not IsUnloading do
+                -- Refresh services every loop to handle round restarts correctly
+                local rep = GetServiceRobust("ReplicatorService", {"Actors", "_lastReplicate"})
+                if rep then replicator_service = rep; Status.RepSvc = "OK" end
 
-    local cli = GetServiceRobust("ClientService", {"Clients", "LocalClient"})
-    if cli then client_service = cli; Status.ClientSvc = "OK" end
+                local cli = GetServiceRobust("ClientService", {"Clients", "LocalClient"})
+                if cli then client_service = cli; Status.ClientSvc = "OK" end
 
-    local inv = GetServiceRobust("InventoryService", {"Inventories", "Primary", "Load"})
-    if inv then inventory_service = inv; Status.Storage = "OK" end
+                local inv = GetServiceRobust("InventoryService", {"Inventories", "Primary", "Load"})
+                if inv then inventory_service = inv; Status.Storage = "OK" end
 
-    local veh = GetServiceRobust("VehicleService", {"Vehicles", "Changed"})
-    if not veh then
-        local tables = {}
-        tables = cached_filtergc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
-        for _, t in pairs(tables) do
-            if type(t) == "table" and t.Vehicles then
-                veh = t
-                break
+                local veh = GetServiceRobust("VehicleService", {"Vehicles", "Changed"})
+                if not veh then
+                    local tables = {}
+                    tables = cached_filtergc("table", {Keys = {"SetSeat", "GetVehicle", "QueryHitbox"}}, false)
+                    for _, t in pairs(tables) do
+                        if type(t) == "table" and t.Vehicles then
+                            veh = t
+                            break
+                        end
+                    end
+                end
+                if veh then vehicle_service = veh; Status.Vehicles = "OK" end
+
+                local tConf = GetTurretConfig()
+                if tConf then
+                    Status.Turrets = "OK"
+                else
+                    Status.Turrets = "Waiting..."
+                end
+
+                updateStatus()
+                task.wait(5)
+                if IsUnloading then break end
             end
-        end
-    end
-    if veh then vehicle_service = veh; Status.Vehicles = "OK" end
-
-    local tConf = GetTurretConfig()
-    if tConf then
-        Status.Turrets = "OK"
-    else
-        Status.Turrets = "Waiting..."
-    end
-
-    updateStatus()
-
-        
+        end)
 
         local part_cache = setmetatable({}, {__mode = "k"})
         local function get_part(model, name)
@@ -771,8 +748,7 @@
             return is_vis
         end
 
-        local stepTime = travelTime
-        local ping = local_player:GetNetworkPing()
+
 
         local function register_actor(actor)
             if not actor or actor_list[actor] then return end
@@ -1801,13 +1777,7 @@
                 task.wait(10)
             end
         end)
-        add_connection(run_service.RenderStepped:Connect(function()
-            local radius = (get_val('FOVRadius') or 400) * 2
-            local visible = get_bool('ShowFOV') and get_bool('SilentAimEnabled')
-            
-            FOV_Data.Circle.Size = UDim2.new(0, radius, 0, radius)
-            FOV_Data.Gui.Enabled = visible
-        end))
+
 
         -- Auto Lockpick removed
 
@@ -2322,6 +2292,8 @@
         local last_pmap_upd = 0
         local stable_count_zombies = 0
         local stable_count_npcs = 0
+        local active_actors = {}
+        local handled = {}
         
         -- Main Loop
         add_connection(run_service.RenderStepped:Connect(function()
@@ -2402,10 +2374,10 @@
             end
 
             table.clear(handled)
+            table.clear(active_actors)
             local my_team = get_team(local_player)
 
             -- Unified Processor
-            local active_actors = {}
             
             -- Collect actors from Players (Primary Method)
             -- Direct iteration over PlayerNameMap is faster if we want all players, but GetPlayers is fine.
@@ -2946,8 +2918,4 @@
             getgenv().ScriptLoaded = nil
             print("Script Unloaded Cleanly.")
         end
-
-
-
-
-
+    

@@ -1207,7 +1207,7 @@
                     EmptyLbl.Size = UDim2.new(1, 0, 1, 0)
                     EmptyLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
                     EmptyLbl.BackgroundTransparency = 1
-                    EmptyLbl.Font = Enum.Font.GothamItalic
+                    EmptyLbl.Font = Enum.Font.Gotham
                     EmptyLbl.TextSize = 11
                     EmptyLbl.TextXAlignment = Enum.TextXAlignment.Left
                     EmptyLbl.Parent = Row

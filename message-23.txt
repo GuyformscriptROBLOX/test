@@ -214,6 +214,15 @@
         local lighting = game:GetService("Lighting")
         local camera = workspace.CurrentCamera
         local local_player = players.LocalPlayer
+        
+        -- OPTIMIZATION: Event-based Player Caching
+        local CachedPlayers = players:GetPlayers()
+        players.PlayerAdded:Connect(function(p) table.insert(CachedPlayers, p) end)
+        players.PlayerRemoving:Connect(function(p) 
+            for i, v in ipairs(CachedPlayers) do 
+                if v == p then table.remove(CachedPlayers, i) break end 
+            end 
+        end)
         -- [Fix] Brute-force find ServerConstants
         task.spawn(function()
             local attempts = 0
@@ -1660,7 +1669,7 @@
                     MonitorNeedsRefresh = false
                     pcall(RefreshMonitorTable)
                 end
-                task.wait(0.2)
+                task.wait(1)
             end
         end)
 
@@ -1997,8 +2006,12 @@
             end
         end)
 
-        local function ApplyGunMods(firearm)
+        local function ApplyGunMods(firearm, force)
             if not firearm or not firearm._firearm or not firearm._firearm.Tune then return end
+            
+            -- OPTIMIZATION: Skip if settings haven't changed and not forced
+            if not force and firearm._LastTuneTime and (tick() - firearm._LastTuneTime < 0.2) then return end
+            firearm._LastTuneTime = tick()
             
             local tune = firearm._firearm.Tune
             local caliber = firearm._caliber
@@ -2172,7 +2185,7 @@
 
                 FirearmClass.Equip = function(self, ...)
                     getgenv().CurrentFirearm = self
-                    ApplyGunMods(self)
+                    ApplyGunMods(self, true)
                     return OldEquip(self, ...)
                 end
                 
@@ -2606,7 +2619,7 @@
                             if distSq > 1000000 then
                                 if frame_id % 15 ~= (numeric_id % 15) then skip = true end
                             else
-                                if frame_id % 3 ~= (numeric_id % 3) then skip = true end
+                                if frame_id % 5 ~= (numeric_id % 5) then skip = true end
                             end
                         end
                     end

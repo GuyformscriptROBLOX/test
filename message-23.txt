@@ -25,7 +25,7 @@
 
         local TurretConfigModule = nil
         local OriginalTurretStats = {}
-        local ActiveTurretMods = { NoSpread = false, NoRecoil = false, InstantReload = false, RapidFire = false }
+        local ActiveTurretMods = { NoSpread = false, NoRecoil = false, InstantReload = false, RapidFire = false, CustomRPM = false, RPMValue = 1000 }
 
         -- Lightweight caching wrappers for expensive GC calls
         local _gc_cache = {}
@@ -570,6 +570,19 @@
             return nil
         end
 
+        local function GetTurretConfig()
+            if not TurretConfigModule then
+                local mod = findModule("Turrets")
+                if mod then
+                    local success, result = pcall(require, mod)
+                    if success then
+                        TurretConfigModule = result
+                    end
+                end
+            end
+            return TurretConfigModule
+        end
+
         task.spawn(function()
             -- One-time service initialization to prevent periodic lag
             local max_attempts = 3
@@ -882,7 +895,7 @@
                     
                     local gc_results = cached_search_gc("table", {Keys = {"FireServer", "InvokeServer", "_events"}}, false)
                     for _, t in pairs(gc_results) do
-                        if t._events and t._events.RegisterActor then
+                        if t._events and type(t._events) == "table" and t._events.RegisterActor then
                             network_obj = t
                             break
                         end
@@ -1446,27 +1459,7 @@
 
 
 
-        local TurretConfigModule = nil
-        local OriginalTurretStats = {}
-        local ActiveTurretMods = {
-            NoSpread = false,
-            NoRecoil = false,
-            CustomRPM = false,
-            RPMValue = 1000
-        }
 
-        local function GetTurretConfig()
-            if not TurretConfigModule then
-                local mod = findModule("Turrets")
-                if mod then
-                    local success, result = pcall(require, mod)
-                    if success then
-                        TurretConfigModule = result
-                    end
-                end
-            end
-            return TurretConfigModule
-        end
 
 
         local function EnsureBackup(turretName, statName, value)

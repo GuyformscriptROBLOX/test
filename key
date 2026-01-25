@@ -1,1 +1,342 @@
-SENvTkQydDV4bg==
+-- [[ APEX TITAN DUMPER - V6 FINAL ARCHITECT ]] --
+-- [[ Status: UNDETECTED | Fixes: Path Limit, Emoji Names, Null Instances ]] --
+
+local TITAN_CONFIG = {
+    -- [Główne]
+    SmartDeduplication = true,   -- Hash check (Wymagane dla wydajności)
+    IgnoreSystemScripts = true,  -- Ignoruje CoreGui, Chat, Animate
+    OnlyPlayerScripts = false,   -- Jeśli true, pobiera tylko ze StarterPlayer/Character
+    
+    -- [Bezpieczeństwo Zapisu]
+    MaxFolderDepth = 8,          -- Maksymalna głębokość folderów (zapobiega błędom Windows)
+    MaxNameLength = 30,          -- Maksymalna długość nazwy jednego pliku/folderu
+    SaveBytecodeFallback = true, -- Zapisz .bin jeśli dekompilacja zawiedzie
+    
+    -- [Wydajność]
+    ProcessRate = 0.02,          -- Czas (sekundy) między skryptami (0 = max speed, ale ryzyko crasha)
+    LogRemotes = true            -- Czy logować RemoteEvents
+}
+
+-- [SERVICES]
+local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+-- [CAPABILITY CHECK] - Sprawdzamy co potrafi Twój executor
+local CAPABILITIES = {
+    decompile = (type(decompile) == "function"),
+    getscripthash = (type(getscripthash) == "function"),
+    getscriptbytecode = (type(getscriptbytecode) == "function"),
+    gethui = (type(gethui) == "function"),
+    writefile = (type(writefile) == "function"),
+    makefolder = (type(makefolder) == "function")
+}
+
+if not CAPABILITIES.writefile or not CAPABILITIES.makefolder then
+    return warn("[Apex Titan] Your executor does not support File System operations!")
+end
+
+-- [SETUP ENVIRONMENT]
+local ScreenGui = Instance.new("ScreenGui")
+local RootFolder = "ApexDump_" .. game.GameId .. "_" .. math.random(1000,9999)
+local FolderCache = {}
+local HashCache = {}
+local RemoteLogs = {}
+local AbortFlag = false
+local TotalScripts = 0
+local DumpedCount = 0
+
+-- [UI BUILDER] (Minimalist & Crash-Proof)
+local function createUI()
+    if CAPABILITIES.gethui then
+        ScreenGui.Parent = gethui()
+    elseif syn and syn.protect_gui then
+        syn.protect_gui(ScreenGui)
+        ScreenGui.Parent = CoreGui
+    else
+        ScreenGui.Parent = CoreGui
+    end
+    
+    ScreenGui.Name = "ApexTitanUI"
+    ScreenGui.ResetOnSpawn = false
+    
+    local Main = Instance.new("Frame", ScreenGui)
+    Main.Size = UDim2.new(0, 320, 0, 100)
+    Main.Position = UDim2.new(0.5, -160, 0.1, 0)
+    Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    Main.BorderSizePixel = 0
+    Main.Active = true
+    Main.Draggable = true
+    
+    local Stroke = Instance.new("UIStroke", Main)
+    Stroke.Color = Color3.fromRGB(0, 255, 180)
+    Stroke.Thickness = 1
+    
+    local Title = Instance.new("TextLabel", Main)
+    Title.Text = "APEX TITAN // V6 ARCHITECT"
+    Title.Size = UDim2.new(1, 0, 0, 25)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = Color3.fromRGB(0, 255, 180)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 14
+    
+    local Status = Instance.new("TextLabel", Main)
+    Status.Name = "StatusLbl"
+    Status.Text = "Initializing..."
+    Status.Size = UDim2.new(1, -20, 0, 40)
+    Status.Position = UDim2.new(0, 10, 0, 25)
+    Status.BackgroundTransparency = 1
+    Status.TextColor3 = Color3.fromRGB(200, 200, 200)
+    Status.TextWrapped = true
+    Status.Font = Enum.Font.Code
+    Status.TextSize = 12
+    
+    local StopBtn = Instance.new("TextButton", Main)
+    StopBtn.Text = "STOP / SAVE"
+    StopBtn.Size = UDim2.new(0, 100, 0, 25)
+    StopBtn.Position = UDim2.new(0.5, -50, 0.7, 0)
+    StopBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+    StopBtn.TextColor3 = Color3.new(1,1,1)
+    StopBtn.Font = Enum.Font.GothamBold
+    Instance.new("UICorner", StopBtn).CornerRadius = UDim.new(0,4)
+    
+    StopBtn.MouseButton1Click:Connect(function()
+        AbortFlag = true
+        Status.Text = "Stopping... Finishing current tasks."
+        StopBtn.Text = "WAIT..."
+    end)
+    
+    return Status
+end
+
+local StatusLabel = createUI()
+
+-- [UTILITIES]
+local function sanitize(str)
+    if not str then return "Unknown" end
+    -- Zezwalaj tylko na litery, cyfry i podstawowe znaki. Usuń Emoji.
+    local clean = str:gsub("[^%w%-_%s%[%]]", ""):gsub("%s+", "_")
+    -- Limit długości nazwy (Windows fix)
+    if #clean > TITAN_CONFIG.MaxNameLength then
+        clean = clean:sub(1, TITAN_CONFIG.MaxNameLength) .. "_trunc"
+    end
+    -- Usuń kropki na końcu (Windows fix)
+    while clean:sub(-1) == "." do clean = clean:sub(1, -2) end
+    if clean == "" then clean = "Unnamed_" .. math.random(1,9999) end
+    return clean
+end
+
+local function getSafePath(obj)
+    -- Funkcja budująca ścieżkę z limitem głębokości
+    if not obj or not obj.Parent then return RootFolder .. "/Orphaned" end
+    
+    -- Sprawdź cache
+    local id = obj.Parent:GetDebugId(0)
+    if FolderCache[id] then return FolderCache[id] end
+    
+    local parts = {}
+    local curr = obj.Parent
+    local depth = 0
+    
+    while curr and curr ~= game and depth < TITAN_CONFIG.MaxFolderDepth do
+        table.insert(parts, 1, sanitize(curr.Name))
+        curr = curr.Parent
+        depth = depth + 1
+    end
+    
+    if curr ~= game then
+        -- Jeśli przekroczono limit głębokości, wrzuć do folderu "_DeepStorage"
+        table.insert(parts, 1, "_DeepStorage")
+    end
+    
+    local path = RootFolder
+    for _, part in ipairs(parts) do
+        path = path .. "/" .. part
+        if not isfolder(path) then makefolder(path) end
+    end
+    
+    FolderCache[id] = path
+    return path
+end
+
+local function formatCode(source)
+    -- Lekki formatter, nie psuje stringów
+    if not TITAN_CONFIG.SmartDeduplication then return source end
+    return source -- Pełny beautifier usunięty dla stabilności, dekompilatory robią to same
+end
+
+-- [CORE ENGINE]
+local function dumpScript(s)
+    if AbortFlag then return end
+    
+    -- Ignorowanie skryptów systemowych
+    if TITAN_CONFIG.IgnoreSystemScripts then
+        if s:IsDescendantOf(CoreGui) or s:IsDescendantOf(game:GetService("CorePackages")) or 
+           s.Name == "Animate" or s.Name == "Sound" then
+            return
+        end
+    end
+
+    local startT = os.clock()
+    
+    -- 1. Get Hash (or Path as fallback)
+    local hash = "N/A"
+    local bytecode = ""
+    
+    if CAPABILITIES.getscripthash then
+        local s_ok, h = pcall(getscripthash, s)
+        if s_ok and h then hash = h end
+    else
+        hash = s:GetFullName()
+    end
+
+    -- 2. Deduplication Check
+    local folder = getSafePath(s)
+    local name = sanitize(s.Name)
+    local finalPath = folder .. "/" .. name .. ".lua"
+    
+    if TITAN_CONFIG.SmartDeduplication and HashCache[hash] then
+        local linkPath = folder .. "/LINK_" .. name .. ".txt"
+        if not isfile(linkPath) then
+            writefile(linkPath, "DUPLICATE OF:\n" .. HashCache[hash])
+        end
+        return
+    end
+
+    -- 3. Resolve Name Conflicts
+    local n = 1
+    while isfile(finalPath) do
+        finalPath = folder .. "/" .. name .. "_" .. n .. ".lua"
+        n = n + 1
+    end
+
+    -- 4. Retrieve Source
+    local source = nil
+    local method = "Source"
+    
+    if s.Source and #s.Source > 1 then
+        source = s.Source
+    elseif CAPABILITIES.decompile then
+        method = "Decompile"
+        local ok, res = pcall(decompile, s)
+        -- Niektóre dekompilatory zwracają string "protected" zamiast błędu
+        if ok and res and #res > 0 and not res:match("protected") and not res:match("failed") then
+            source = res
+        end
+    end
+
+    -- 5. Save
+    if source then
+        local header = string.format("-- [[ %s ]]\n-- Class: %s\n-- Path: %s\n-- Hash: %s\n\n", 
+            name, s.ClassName, s:GetFullName(), hash)
+        
+        writefile(finalPath, header .. source)
+        if TITAN_CONFIG.SmartDeduplication then HashCache[hash] = finalPath end
+        DumpedCount = DumpedCount + 1
+    elseif TITAN_CONFIG.SaveBytecodeFallback and CAPABILITIES.getscriptbytecode then
+        -- Fallback to .bin
+        local bc = getscriptbytecode(s)
+        if bc and #bc > 0 then
+            writefile(finalPath:gsub(".lua", ".bin"), bc)
+            writefile(finalPath, "-- Source protected or decompile failed.\n-- Bytecode saved as .bin")
+        end
+    end
+    
+    -- UI Feedback (Throttled)
+    if DumpedCount % 10 == 0 then
+        StatusLabel.Text = string.format("Dumped: %d\nScanning: %s", DumpedCount, name)
+    end
+end
+
+-- [REMOTE LOGGER]
+if TITAN_CONFIG.LogRemotes then
+    task.spawn(function()
+        local LogPath = RootFolder .. "/_Remotes"
+        if not isfolder(RootFolder) then makefolder(RootFolder) end
+        if not isfolder(LogPath) then makefolder(LogPath) end
+        
+        -- Hook
+        local mt = getrawmetatable(game)
+        setreadonly(mt, false)
+        local old = mt.__namecall
+        
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if not AbortFlag and (method == "FireServer" or method == "InvokeServer") then
+                local args = {...}
+                task.spawn(function()
+                    local content = "ARGS ERROR"
+                    pcall(function() content = HttpService:JSONEncode(args) end)
+                    if #content > 2000 then content = content:sub(1,2000).." [TRUNCATED]" end
+                    
+                    local logLine = string.format("[%s] %s -> %s | %s", os.date("%X"), method, self.Name, content)
+                    table.insert(RemoteLogs, logLine)
+                end)
+            end
+            return old(self, ...)
+        end)
+        setreadonly(mt, true)
+        
+        -- Buffer Flush Loop
+        while not AbortFlag do
+            if #RemoteLogs > 0 then
+                appendfile(LogPath .. "/Logs.txt", table.concat(RemoteLogs, "\n") .. "\n")
+                table.clear(RemoteLogs)
+            end
+            task.wait(3)
+        end
+    end)
+end
+
+-- [MAIN ENTRY]
+task.spawn(function()
+    if not isfolder(RootFolder) then makefolder(RootFolder) end
+    StatusLabel.Text = "Collecting scripts..."
+    task.wait(0.2)
+    
+    local allScripts = {}
+    
+    -- Safe Collection
+    local function collect(parent)
+        local s, items = pcall(function() return parent:GetDescendants() end)
+        if s and items then
+            for _, v in ipairs(items) do
+                if v:IsA("LocalScript") or v:IsA("ModuleScript") then
+                    table.insert(allScripts, v)
+                end
+            end
+        end
+    end
+    
+    if TITAN_CONFIG.OnlyPlayerScripts then
+        collect(Players.LocalPlayer)
+    else
+        collect(game)
+        if getnilinstances then
+            pcall(function()
+                for _, v in pairs(getnilinstances()) do
+                    if v:IsA("LocalScript") or v:IsA("ModuleScript") then
+                        table.insert(allScripts, v)
+                    end
+                end
+            end)
+        end
+    end
+    
+    TotalScripts = #allScripts
+    StatusLabel.Text = "Processing " .. TotalScripts .. " scripts..."
+    
+    for _, scriptObj in ipairs(allScripts) do
+        if AbortFlag then break end
+        dumpScript(scriptObj)
+        task.wait(TITAN_CONFIG.ProcessRate)
+    end
+    
+    StatusLabel.Text = AbortFlag and "DUMP ABORTED" or "SUCCESS! Check Workspace."
+    StatusLabel.TextColor3 = AbortFlag and Color3.fromRGB(255,100,100) or Color3.fromRGB(100,255,100)
+    
+    task.wait(5)
+    ScreenGui:Destroy()
+end)
+
